@@ -117,9 +117,3 @@ Claude Web, ChatGPT, Gemini Web, Gemini API (Interactions API), Gemini CLI, Anti
 ## License
 
 MIT — see [LICENSE](LICENSE).
-
----
-
-[![Share AI Slot — family slots & AI subscriptions from $1/month](https://raw.githubusercontent.com/mrkaylabs/share-ai-slot/main/banner.png)](https://mrkaylabs.github.io/share-ai-slot/)
-
-**Share AI Slot** — need a Google family slot or an AI subscription (ChatGPT, Claude Code...)? Got a spare one to sell? [Submit here](https://mrkaylabs.github.io/share-ai-slot/) — from $1/month, varies by country.

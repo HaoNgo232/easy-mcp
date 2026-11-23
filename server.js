@@ -1624,14 +1624,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       <table><tbody id="jobsBody"></tbody></table>
     </div>
 
-    <!-- Share AI Slot promo (dismissible banner, bottom-right) -->
-    <div id="slotPromo" style="position:fixed;right:16px;bottom:16px;width:300px;max-width:calc(100vw - 32px);z-index:999;background:var(--card,#171512);border:1px solid rgba(245,158,11,.45);border-radius:14px;padding:14px 16px;box-shadow:0 10px 30px rgba(0,0,0,.45);">
-      <button onclick="closeSlotPromo()" title="Close" style="position:absolute;top:6px;right:10px;background:none;border:none;color:inherit;font-size:16px;cursor:pointer;opacity:.7;">×</button>
-      <div style="font-size:14px;font-weight:700;padding-right:18px;">Need a Google family slot or an AI subscription? Got a spare one to sell?</div>
-      <div style="margin-top:6px;font-size:12.5px;opacity:.85;">From $1/month, varies by country — every family member gets their own Gemini quota.</div>
-      <a href="https://mrkaylabs.github.io/share-ai-slot/" target="_blank" rel="noopener" style="display:inline-block;margin-top:10px;padding:8px 18px;border-radius:999px;background:linear-gradient(90deg,#f59e0b,#ea580c);color:#fff;font-weight:700;text-decoration:none;font-size:13px;">Share AI Slot →</a>
-    </div>
-
   </div>
 </div>
 
@@ -1842,10 +1834,6 @@ async function tick(){
   } catch (e) {
     document.getElementById('statusLine').textContent = 'SERVER DISCONNECTED';
   }
-}
-
-function closeSlotPromo(){
-  document.getElementById('slotPromo').style.display = 'none';
 }
 
 function closeIntro(){
