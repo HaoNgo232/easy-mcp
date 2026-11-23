@@ -35,16 +35,16 @@ stays identical across restarts. Run with `--rotate-token` to mint a new one.
 One command — paste into cmd, PowerShell, or terminal (needs Node.js 18+):
 
 ```
-npx -y https://codeload.github.com/mrkaylabs/easy-mcp/tar.gz/refs/heads/main
+npx -y https://codeload.github.com/HaoNgo232/easy-mcp/tar.gz/refs/heads/main
 ```
 
 That runs Easy MCP on the current folder and opens the dashboard in your
-browser. To use another folder: `npx -y https://codeload.github.com/mrkaylabs/easy-mcp/tar.gz/refs/heads/main /path/to/your/project`
+browser. To use another folder: `npx -y https://codeload.github.com/HaoNgo232/easy-mcp/tar.gz/refs/heads/main /path/to/your/project`
 
 Or clone it:
 
 ```
-git clone https://github.com/mrkaylabs/easy-mcp.git
+git clone https://github.com/HaoNgo232/easy-mcp.git
 cd easy-mcp
 node easy-mcp.js /path/to/your/project
 ```
@@ -82,6 +82,10 @@ The dashboard is the control panel:
 `read_file`, `read_files`, `write_file`, `write_files`, `edit_file`, `list_directory`, `search_files`, `get_file_info`, `execute_command`, `start_job`, `job_status`, `stop_job`, `list_jobs`, `git_status`, `git_diff`, `fetch_url`, `get_current_project`, `set_project`.
 
 All file access is jailed to the project folder. Shell tools (`execute_command`, `start_job`) only work while Shell is enabled in the dashboard.
+
+### Image files
+
+`read_file` automatically returns PNG, JPEG, GIF, and WebP files as native MCP image content, so compatible clients can pass the image directly to vision-capable models. Image files are limited to 5 MiB; text files retain the existing 10 MiB limit. SVG and other unsupported formats are treated as text when possible. The MCP client and selected model must both support image content for visual analysis to work.
 
 ## Options
 

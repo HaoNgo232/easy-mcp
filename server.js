@@ -314,6 +314,51 @@ function walkFiles(dir, out = [], depth = 0) {
 }
 
 const MAX_READ_BYTES = 10 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+// Keep this list conservative: these formats are commonly accepted by
+// multimodal model APIs and can be passed through MCP ImageContent unchanged.
+const IMAGE_MIME_TYPES = Object.freeze({
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp'
+});
+
+function imageMimeTypeFor(abs) {
+  return IMAGE_MIME_TYPES[path.extname(abs).toLowerCase()] || null;
+}
+
+function hasImageSignature(data, mimeType) {
+  if (mimeType === 'image/png') {
+    return data.length >= 8 && data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  }
+  if (mimeType === 'image/jpeg') {
+    return data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
+  }
+  if (mimeType === 'image/gif') {
+    const signature = data.toString('ascii', 0, 6);
+    return signature === 'GIF87a' || signature === 'GIF89a';
+  }
+  if (mimeType === 'image/webp') {
+    return data.length >= 12 && data.toString('ascii', 0, 4) === 'RIFF' && data.toString('ascii', 8, 12) === 'WEBP';
+  }
+  return false;
+}
+
+function readImageFile(abs, mimeType) {
+  const size = fs.statSync(abs).size;
+  if (size > MAX_IMAGE_BYTES) {
+    throw new Error('Image too large to send through MCP (' + (size / 1048576).toFixed(1) + ' MB, limit 5 MB)');
+  }
+  const data = fs.readFileSync(abs);
+  if (!hasImageSignature(data, mimeType)) {
+    throw new Error('File extension indicates ' + mimeType + ', but its contents do not match that image format');
+  }
+  return { type: 'image', data: data.toString('base64'), mimeType };
+}
+
 function readTextFile(abs) {
   const size = fs.statSync(abs).size;
   if (size > MAX_READ_BYTES) throw new Error(`File too large to read as text (${(size / 1048576).toFixed(1)} MB, limit 10 MB)`);
@@ -396,10 +441,12 @@ function fetchUrl(url, hops = 0) {
 const TOOLS = [
   {
     name: 'read_file',
-    description: 'Read a UTF-8 text file from the project folder. Returns line-numbered content.',
+    description: 'Read a UTF-8 text file or a PNG, JPEG, GIF, or WebP image from the project folder. Text is returned with line numbers; images are returned as native MCP image content (maximum 5 MB).',
     inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
     run: ({ path: p }) => {
       const abs = resolveInProject(p);
+      const mimeType = imageMimeTypeFor(abs);
+      if (mimeType) return readImageFile(abs, mimeType);
       const lines = readTextFile(abs).split('\n');
       return `File: ${relOf(abs)} (${lines.length} lines)\n\n` + lines.map((l, i) => `${String(i + 1).padStart(4)} | ${l}`).join('\n');
     }
@@ -626,7 +673,7 @@ async function callTool(name, toolArgs) {
   try {
     const result = await tool.run(toolArgs || {});
     recordCall(name, true, Date.now() - t0);
-    return String(result);
+    return result;
   } catch (err) {
     recordCall(name, false, Date.now() - t0);
     throw err;
@@ -656,8 +703,11 @@ async function handleRpc(msg) {
       return reply({ tools: toolList() });
     case 'tools/call': {
       try {
-        const text = await callTool(params?.name, params?.arguments);
-        return reply({ content: [{ type: 'text', text }], isError: false });
+        const result = await callTool(params?.name, params?.arguments);
+        const content = result && typeof result === 'object' && result.type === 'image'
+          ? [result]
+          : [{ type: 'text', text: String(result) }];
+        return reply({ content, isError: false });
       } catch (err) {
         return reply({ content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true });
       }

@@ -30,7 +30,7 @@ function checkForUpdate() {
   const configFile = path.join(os.homedir(), '.easy-mcp', 'config.json');
   let cfg = {};
   try { cfg = JSON.parse(fs.readFileSync(configFile, 'utf8')); } catch {}
-  const req = https.get('https://api.github.com/repos/mrkaylabs/easy-mcp/releases/latest', { headers: { 'User-Agent': 'easy-mcp' }, timeout: 4000 }, (res) => {
+  const req = https.get('https://api.github.com/repos/HaoNgo232/easy-mcp/releases/latest', { headers: { 'User-Agent': 'easy-mcp' }, timeout: 4000 }, (res) => {
     let body = '';
     res.on('data', d => { body += d; });
     res.on('end', () => {
