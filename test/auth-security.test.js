@@ -712,4 +712,29 @@ describe('5. OAuth 2.0 Authorization Boundary', () => {
       'Vulnerability: /oauth/authorize auto-issued an authorization code to an unauthenticated request without master token or owner consent!'
     );
   });
+
+  test('[RED TEST] 5.2 /oauth/authorize issues code when token is passed in resource indicator (ChatGPT connector flow)', async () => {
+    // Register client
+    const regRes = await fetch(`${srv.baseUrl}/oauth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        redirect_uris: ['https://chatgpt.com/connector/oauth/callback'],
+        token_endpoint_auth_method: 'none'
+      })
+    });
+    assert.strictEqual(regRes.status, 201);
+    const { client_id } = await regRes.json();
+
+    // GET /oauth/authorize with resource containing the valid token in /mcp/<token> path
+    const resourceUrl = `${srv.baseUrl}/mcp/${srv.token}`;
+    const authUrl = `${srv.baseUrl}/oauth/authorize?response_type=code&client_id=${client_id}&redirect_uri=https://chatgpt.com/connector/oauth/callback&code_challenge=pkce_test&code_challenge_method=plain&resource=${encodeURIComponent(resourceUrl)}`;
+
+    const authRes = await fetch(authUrl, { redirect: 'manual' });
+    // Expected: 302 Found redirecting to callback with code
+    assert.strictEqual(authRes.status, 302, 'Should authorize and redirect with 302 when valid token is in resource');
+    const location = authRes.headers.get('location') || '';
+    assert.ok(location.startsWith('https://chatgpt.com/connector/oauth/callback'), 'Should redirect to redirect_uri');
+    assert.ok(location.includes('code='), 'Redirect URL must contain authorization code');
+  });
 });

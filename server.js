@@ -895,8 +895,21 @@ function isPublicPath(p) {
 function bearerOf(req, url) {
   const header = req.headers.authorization || '';
   const m = header.match(/^Bearer\s+(.*)$/i);
-  return m ? m[1]
-    : (req.headers['x-easy-mcp-token'] || url.searchParams.get('token') || req._pathToken || '');
+  if (m) return m[1];
+  if (req.headers['x-easy-mcp-token']) return req.headers['x-easy-mcp-token'];
+  if (url.searchParams.get('token')) return url.searchParams.get('token');
+  if (req._pathToken) return req._pathToken;
+  const resource = url.searchParams.get('resource');
+  if (resource) {
+    try {
+      const resUrl = new URL(resource);
+      const resPathMatch = resUrl.pathname.match(/\/mcp\/([a-zA-Z0-9_\-\.]{16,128})/);
+      if (resPathMatch) return resPathMatch[1];
+      const resQueryToken = resUrl.searchParams.get('token');
+      if (resQueryToken) return resQueryToken;
+    } catch {}
+  }
+  return '';
 }
 function authorized(req, url) {
   if (!REQUIRE_AUTH) return true;
@@ -2069,6 +2082,42 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === '/oauth/authorize') {
       if (REQUIRE_AUTH && !authorized(req, url)) {
+        const accept = req.headers.accept || '';
+        if (accept.includes('text/html')) {
+          const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Easy MCP — Authorize Access</title>
+<style>
+  body { background: #0d0c0a; color: #fff; font-family: system-ui, -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 16px; box-sizing: border-box; }
+  .box { background: #151311; border: 1px solid #29241f; border-radius: 12px; padding: 28px; width: 100%; max-width: 400px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
+  h2 { font-size: 18px; margin: 0 0 8px; color: #f5a623; }
+  p { font-size: 13px; color: #aaa; margin: 0 0 20px; line-height: 1.5; }
+  label { font-size: 12px; font-weight: 600; display: block; margin-bottom: 6px; color: #ccc; }
+  input[type="text"] { width: 100%; box-sizing: border-box; background: #1e1b18; border: 1px solid #332d26; border-radius: 8px; padding: 10px; color: #fff; font-family: monospace; font-size: 13px; margin-bottom: 16px; outline: none; }
+  input[type="text"]:focus { border-color: #6c5ce7; }
+  button { width: 100%; background: #6c5ce7; border: none; border-radius: 8px; color: #fff; padding: 12px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+  button:hover { background: #5b4cdb; }
+</style>
+</head>
+<body>
+<div class="box">
+  <h2>Authorize MCP Client</h2>
+  <p>An AI connector (ChatGPT / Claude) is requesting access to your workspace. Enter your API Key to authorize.</p>
+  <form method="GET" action="/oauth/authorize">
+    ${[...url.searchParams.entries()].map(([k, v]) => k !== 'token' ? `<input type="hidden" name="${k}" value="${v.replace(/"/g, '&quot;')}">` : '').join('')}
+    <label for="tok">API Key / Token</label>
+    <input type="text" id="tok" name="token" placeholder="Paste your API Key" required autofocus>
+    <button type="submit">Approve & Authorize</button>
+  </form>
+</div>
+</body>
+</html>`;
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          return res.end(html);
+        }
         return sendJson(res, 401, { error: 'unauthorized', error_description: 'Authorization requires valid token' });
       }
       const redirectUri = url.searchParams.get('redirect_uri');
