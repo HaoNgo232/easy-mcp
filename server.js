@@ -131,6 +131,7 @@ let tunnelMode = process.env.EASY_MCP_TUNNEL || loadConfig().tunnel || 'cloudfla
 if (!['cloudflare', 'funnel', 'none'].includes(tunnelMode)) tunnelMode = 'cloudflare';
 let tunnelProc = null;
 let tunnelError = '';
+let directTunnelUrl = '';
 
 function cloudflaredPath() {
   return path.join(easyMcpHome, 'bin', process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared');
@@ -173,11 +174,28 @@ function ensureCloudflared() {
   });
 }
 
+function killCloudflared(port) {
+  if (tunnelProc) {
+    try { tunnelProc.kill(); } catch {}
+    tunnelProc = null;
+  }
+  if (!port) return;
+  try {
+    if (process.platform === 'win32') {
+      const psCmd = `Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" | Where-Object { $_.CommandLine -match ':${port}(\\\\D|$)' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`;
+      spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', psCmd], { stdio: 'ignore', timeout: 5000 });
+    } else {
+      spawnSync('pkill', ['-f', `cloudflared.*:${port}`], { stdio: 'ignore' });
+    }
+  } catch {}
+}
+
 function stopTunnel() {
-  if (tunnelProc) { try { tunnelProc.kill(); } catch {} tunnelProc = null; }
+  killCloudflared(PORT);
   // Note: Funnel is left ON in tailscaled when switching away — turning it off
   // requires the Tailscale owner's session, and it proxies the same port anyway.
   publicUrl = '';
+  directTunnelUrl = '';
 }
 
 async function startTunnel(mode) {
@@ -205,6 +223,7 @@ async function startTunnel(mode) {
   }
   // cloudflare
   tunnelMode = 'cloudflare';
+  killCloudflared(PORT);
   const bin = await ensureCloudflared();
   const shortId = process.env.EASY_MCP_SHORT_ID || getOrCreateShortId();
   tunnelProc = spawn(bin, ['tunnel', '--url', `http://127.0.0.1:${PORT}`, '--no-autoupdate', '--retries', '99'], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -219,6 +238,7 @@ async function startTunnel(mode) {
     }
     if (directUrl && directUrl !== lastDirectUrl) {
       lastDirectUrl = directUrl;
+      directTunnelUrl = directUrl;
       const ok = await registerTunnelUrl(shortId, directUrl);
       publicUrl = ok ? `https://r${shortId}.abc-tunnel.us` : directUrl;
       const linkPath = REQUIRE_AUTH && TOKEN ? `/mcp/${TOKEN}` : '/mcp';
@@ -905,9 +925,14 @@ function isLocalAdminRequest(req) {
 }
 function hostAllowed(req) {
   if (isLoopbackHost(req.headers.host)) return true;
+  const host = String(req.headers.host || '').toLowerCase();
   if (publicUrl) {
-    try { return String(req.headers.host || '').toLowerCase() === new URL(publicUrl).host.toLowerCase(); } catch {}
+    try { if (host === new URL(publicUrl).host.toLowerCase()) return true; } catch {}
   }
+  if (directTunnelUrl) {
+    try { if (host === new URL(directTunnelUrl).host.toLowerCase()) return true; } catch {}
+  }
+  if (host.endsWith('.trycloudflare.com') || host.endsWith('.abc-tunnel.us')) return true;
   return false;
 }
 

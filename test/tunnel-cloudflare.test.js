@@ -154,4 +154,85 @@ describe('Cloudflare Persistent Domain (9router port)', () => {
     assert.strictEqual(data.tunnelUrl, testTunnelUrl);
     assert.strictEqual(registrations.length, 1);
   });
+
+  test('[RED TEST] 3. hostAllowed permits *.trycloudflare.com and *.abc-tunnel.us proxy Host headers', async () => {
+    const port = await getFreePort();
+    const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'easy-mcp-tun-home-'));
+    const testProj = fs.mkdtempSync(path.join(os.tmpdir(), 'easy-mcp-tun-proj-'));
+    const token = 'test_token_cloudflare_host_check';
+
+    const env = {
+      ...process.env,
+      HOME: testHome,
+      USERPROFILE: testHome,
+      EASY_MCP_PORT: String(port),
+      EASY_MCP_TOKEN: token,
+      EASY_MCP_PROJECT: testProj,
+      EASY_MCP_TUNNEL: 'none',
+      EASY_MCP_REQUIRE_AUTH: '1'
+    };
+
+    const serverArgs = [path.resolve(__dirname, '..', 'server.js')];
+    const child = spawn(process.execPath, serverArgs, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+
+    try {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Server start timed out')), 8000);
+        child.stdout.on('data', d => {
+          if (d.toString().includes('Easy MCP server on')) {
+            clearTimeout(timer);
+            resolve();
+          }
+        });
+        child.on('error', err => { clearTimeout(timer); reject(err); });
+      });
+
+      // Admin secret to set publicUrl
+      const dashRes = await fetch(`http://127.0.0.1:${port}/`);
+      const html = await dashRes.text();
+      const adminSecret = html.match(/const ADMIN = ['"]([a-f0-9]+)['"];/)?.[1];
+      assert.ok(adminSecret);
+
+      // Set publicUrl to https://rvy44pi.abc-tunnel.us
+      await fetch(`http://127.0.0.1:${port}/api/set-public-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-easy-mcp-admin': adminSecret },
+        body: JSON.stringify({ url: 'https://rvy44pi.abc-tunnel.us' })
+      });
+
+      // Helper using http.request to preserve exact Host header
+      function rawReq(headers = {}) {
+        return new Promise((resolve, reject) => {
+          const req = http.request({
+            hostname: '127.0.0.1',
+            port,
+            path: '/mcp',
+            method: 'GET',
+            headers
+          }, res => {
+            resolve(res.statusCode);
+          });
+          req.on('error', reject);
+          req.end();
+        });
+      }
+
+      // Request with Host: railroad-exact-solving-logged.trycloudflare.com
+      // Expected: Not 403 Forbidden. Should reach auth (200 with token or 401 without token)
+      const statusWithoutToken = await rawReq({
+        'Host': 'railroad-exact-solving-logged.trycloudflare.com',
+        'cf-ray': 'mock-ray-id-123'
+      });
+      assert.strictEqual(statusWithoutToken, 401, 'Host should be allowed and return 401 Unauthorized, not 403 Forbidden');
+
+      const statusWithToken = await rawReq({
+        'Host': 'railroad-exact-solving-logged.trycloudflare.com',
+        'Authorization': `Bearer ${token}`,
+        'cf-ray': 'mock-ray-id-123'
+      });
+      assert.strictEqual(statusWithToken, 200, 'Host should be allowed and return 200 with valid token');
+    } finally {
+      await stopServer(child);
+    }
+  });
 });
