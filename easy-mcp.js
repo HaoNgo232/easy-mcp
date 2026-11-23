@@ -144,6 +144,7 @@ async function main() {
   if (args.includes('--read-only')) serverArgs.push('--read-only');
   if (args.includes('--enable-shell')) serverArgs.push('--enable-shell');
   if (args.includes('--disable-shell')) serverArgs.push('--disable-shell');
+  if (args.includes('--no-auth')) serverArgs.push('--no-auth');
   if (SKIP_JAIL) serverArgs.push('--dangerously-skip-jail');
   const server = spawn(process.execPath, serverArgs, {
     env: { ...process.env, EASY_MCP_PORT: String(PORT), EASY_MCP_TOKEN: TOKEN, EASY_MCP_PROJECT: projectDir, ...(TUNNEL_MODE ? { EASY_MCP_TUNNEL: TUNNEL_MODE } : {}) },

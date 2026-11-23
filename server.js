@@ -86,6 +86,14 @@ function saveConfig(patch) {
     fs.writeFileSync(configFile, JSON.stringify({ ...loadConfig(), ...patch }, null, 2) + '\n');
   } catch {}
 }
+let REQUIRE_AUTH = args.includes('--no-auth') ? false : (process.env.EASY_MCP_REQUIRE_AUTH === '0' ? false : (loadConfig().requireAuth !== false));
+function tailscaleBin() {
+  if (process.platform === 'win32') {
+    const defaultPath = 'C:\\Program Files\\Tailscale\\tailscale.exe';
+    if (fs.existsSync(defaultPath)) return defaultPath;
+  }
+  return 'tailscale';
+}
 let tunnelMode = process.env.EASY_MCP_TUNNEL || loadConfig().tunnel || 'cloudflare';
 if (!['cloudflare', 'funnel', 'none'].includes(tunnelMode)) tunnelMode = 'cloudflare';
 let tunnelProc = null;
@@ -143,10 +151,11 @@ async function startTunnel(mode) {
   tunnelError = '';
   if (mode === 'none') { tunnelMode = 'none'; return; }
   if (mode === 'funnel') {
-    try { spawnSync('tailscale', ['funnel', '--bg', String(PORT)], { stdio: 'ignore', timeout: 20000 }); } catch {}
+    const ts = tailscaleBin();
+    try { spawnSync(ts, ['funnel', '--bg', String(PORT)], { stdio: 'ignore', timeout: 20000 }); } catch {}
     let dns = '';
     try {
-      const st = spawnSync('tailscale', ['status', '--json'], { encoding: 'utf8', timeout: 15000 });
+      const st = spawnSync(ts, ['status', '--json'], { encoding: 'utf8', timeout: 15000 });
       dns = JSON.parse(st.stdout || '{}').Self?.DNSName?.replace(/\.$/, '') || '';
     } catch {}
     dns = dns || process.env.EASY_MCP_FUNNEL_HOST || '';
@@ -157,7 +166,8 @@ async function startTunnel(mode) {
     }
     tunnelMode = 'funnel';
     publicUrl = 'https://' + dns;
-    console.log(`MCP link:  ${publicUrl}/mcp/${TOKEN}`);
+    const linkPath = REQUIRE_AUTH && TOKEN ? `/mcp/${TOKEN}` : '/mcp';
+    console.log(`MCP link:  ${publicUrl}${linkPath}`);
     return;
   }
   // cloudflare
@@ -168,7 +178,8 @@ async function startTunnel(mode) {
     const m = String(d).match(/https:\/\/(?!api\.)[a-z0-9-]+\.trycloudflare\.com/);
     if (m && !publicUrl) {
       publicUrl = m[0];
-      console.log(`MCP link:  ${publicUrl}/mcp/${TOKEN}`);
+      const linkPath = REQUIRE_AUTH && TOKEN ? `/mcp/${TOKEN}` : '/mcp';
+      console.log(`MCP link:  ${publicUrl}${linkPath}`);
     }
   };
   tunnelProc.stdout.on('data', onData);
@@ -245,9 +256,12 @@ function resolveInProject(p) {
 // execution back in through git itself (config keys, hooks). Block those.
 function assertNotGitInternal(abs) {
   if (!DISABLE_SHELL) return;
-  const rel = path.relative(realpathOrAncestor(projectRoot), realpathOrAncestor(abs)).split(path.sep).join('/');
-  if (rel === '.gitmodules' || rel === '.git/config' || rel.startsWith('.git/hooks/')) {
-    throw new Error('Writing git internals is blocked while the shell is disabled');
+  const realRel = path.relative(realpathOrAncestor(projectRoot), realpathOrAncestor(abs)).split(path.sep).join('/').toLowerCase();
+  const rawRel = path.relative(projectRoot, abs).split(path.sep).join('/').toLowerCase();
+  for (const rel of [realRel, rawRel]) {
+    if (rel === '.gitmodules' || rel === '.git/config' || rel === '.git/hooks' || rel.startsWith('.git/hooks/') || rel.startsWith('.git/config/')) {
+      throw new Error('Writing git internals is blocked while the shell is disabled');
+    }
   }
 }
 function relOf(abs) {
@@ -817,10 +831,12 @@ function isPublicPath(p) {
 }
 function bearerOf(req, url) {
   const header = req.headers.authorization || '';
-  return header.startsWith('Bearer ') ? header.slice(7)
+  const m = header.match(/^Bearer\s+(.*)$/i);
+  return m ? m[1]
     : (req.headers['x-easy-mcp-token'] || url.searchParams.get('token') || req._pathToken || '');
 }
 function authorized(req, url) {
+  if (!REQUIRE_AUTH) return true;
   if (!TOKEN) return false; // fail closed
   const given = bearerOf(req, url);
   if (!given) return false;
@@ -854,6 +870,7 @@ function hostAllowed(req) {
 
 function dashboardData() {
   const q = TOKEN ? `?token=${TOKEN}` : '';
+  const mcpPath = REQUIRE_AUTH && TOKEN ? `/mcp/${TOKEN}` : '/mcp';
   return {
     status: 'online',
     version: '2.3.1',
@@ -862,6 +879,8 @@ function dashboardData() {
     readOnly: READ_ONLY,
     disableShell: DISABLE_SHELL,
     skipJail: SKIP_JAIL,
+    requireAuth: REQUIRE_AUTH,
+    token: TOKEN,
     toolsCount: TOOLS.length,
     toolNames: TOOLS.map(t => t.name),
     sseSessions: sseSessions.size,
@@ -873,7 +892,7 @@ function dashboardData() {
     publicUrl: publicUrl || null,
     tunnelMode,
     tunnelError: tunnelError || null,
-    mcpUrl: publicUrl ? `${publicUrl}/mcp${TOKEN ? '/' + TOKEN : ''}` : null,
+    mcpUrl: publicUrl ? `${publicUrl}${mcpPath}` : null,
     dashboardUrl: `http://127.0.0.1:${PORT}/`,
     recentCalls
   };
@@ -1446,6 +1465,21 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         </button>
       </div>
 
+      <div class="input-row" id="tokenRow" style="margin-top:8px;">
+        <div style="position:relative; flex:1; display:flex; align-items:center;">
+          <input type="text" class="input-text" id="mcpToken" readonly value="" placeholder="API Key / Token" style="padding-left:78px; width:100%; font-family:var(--font-mono, monospace); font-size:12px;">
+          <span style="position:absolute; left:12px; font-size:10px; font-weight:700; color:var(--muted); letter-spacing:0.5px;">API KEY</span>
+        </div>
+        <button class="btn" onclick="copyEl('mcpToken', this)" title="Copy API Key only">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          Copy Key
+        </button>
+        <button class="btn" onclick="rotateToken()" title="Rotate API Key">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+          Rotate
+        </button>
+      </div>
+
       <div style="display:flex; align-items:center; gap:10px; margin-top:12px; flex-wrap:wrap;">
         <span style="font-size:12px; color:var(--muted);">Tunnel:</span>
         <div style="display:inline-flex; border:1px solid var(--border); border-radius:10px; overflow:hidden;">
@@ -1517,6 +1551,17 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       </div>
 
       <div class="toggle-group">
+        <div class="toggle-item" data-tip="Requires the secret API key for all MCP requests. Turn OFF if your AI client does not support authentication headers or path tokens.">
+          <div class="toggle-meta">
+            <div class="t-title">Require API Key Auth</div>
+            <div class="t-desc">Protects MCP endpoints with the secret token. Turn off for open access.</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="togRequireAuth" onchange="saveSetting('requireAuth', this.checked)">
+            <span class="slider"></span>
+          </label>
+        </div>
+
         <div class="toggle-item" data-tip="The AI can read and search files but cannot write, edit or delete anything. Good for code review and Q&A sessions.">
           <div class="toggle-meta">
             <div class="t-title">Read-Only Mode</div>
@@ -1704,6 +1749,20 @@ async function toggleJail(checked){
   await saveSetting('skipJail', checked);
 }
 
+async function rotateToken(){
+  if (!confirm('Rotate API Key? Any MCP client connected using the old key will need the new link or key.')) return;
+  try {
+    const res = await fetch('/api/rotate-token' + q, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Easy-Mcp-Admin': ADMIN }
+    });
+    const d = await res.json();
+    if (d.success) tick();
+  } catch (e) {
+    console.error('Rotate token failed', e);
+  }
+}
+
 async function stopJob(id){
   await fetch('/api/stop-job' + q, {
     method: 'POST',
@@ -1729,14 +1788,21 @@ async function tick(){
     if (d.readOnly) badgeParts.push('READ-ONLY');
     if (d.disableShell) badgeParts.push('SHELL OFF');
     if (d.skipJail) badgeParts.push('JAIL BYPASSED');
+    if (d.requireAuth === false) badgeParts.push('OPEN ACCESS');
     document.getElementById('statusLine').textContent = badgeParts.join(' · ');
 
     document.getElementById('jailWarn').style.display = d.skipJail ? 'block' : 'none';
     document.getElementById('togReadOnly').checked = d.readOnly;
     document.getElementById('togDisableShell').checked = d.disableShell;
     document.getElementById('togSkipJail').checked = d.skipJail;
+    const togAuth = document.getElementById('togRequireAuth');
+    if (togAuth) togAuth.checked = d.requireAuth !== false;
 
     document.getElementById('mcpUrl').value = d.mcpUrl || '(tunnel starting...)';
+    const tokEl = document.getElementById('mcpToken');
+    if (tokEl) tokEl.value = d.token || '';
+    const tokRow = document.getElementById('tokenRow');
+    if (tokRow) tokRow.style.opacity = d.requireAuth !== false ? '1' : '0.45';
     const tc = document.getElementById('tunCloudflare'), tf = document.getElementById('tunFunnel');
     if (tc && tf) {
       const on = 'background:var(--accent, #6c5ce7); color:#fff; font-weight:600;';
@@ -1946,6 +2012,9 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === '/oauth/authorize') {
+      if (REQUIRE_AUTH && !authorized(req, url)) {
+        return sendJson(res, 401, { error: 'unauthorized', error_description: 'Authorization requires valid token' });
+      }
       const redirectUri = url.searchParams.get('redirect_uri');
       const state = url.searchParams.get('state') || '';
       const clientId = url.searchParams.get('client_id') || '';
@@ -2090,14 +2159,27 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { success: true, publicUrl });
     }
     if (req.method === 'GET' && url.pathname === '/api/settings') {
-      return sendJson(res, 200, { readOnly: READ_ONLY, disableShell: DISABLE_SHELL, skipJail: SKIP_JAIL });
+      return sendJson(res, 200, { readOnly: READ_ONLY, disableShell: DISABLE_SHELL, skipJail: SKIP_JAIL, requireAuth: REQUIRE_AUTH });
     }
     if (req.method === 'POST' && url.pathname === '/api/settings') {
       const body = JSON.parse(await readBody(req) || '{}');
       if (typeof body.readOnly === 'boolean') READ_ONLY = body.readOnly;
       if (typeof body.disableShell === 'boolean') DISABLE_SHELL = body.disableShell;
       if (typeof body.skipJail === 'boolean') SKIP_JAIL = body.skipJail;
-      return sendJson(res, 200, { success: true, readOnly: READ_ONLY, disableShell: DISABLE_SHELL, skipJail: SKIP_JAIL });
+      if (typeof body.requireAuth === 'boolean') {
+        REQUIRE_AUTH = body.requireAuth;
+        saveConfig({ requireAuth: REQUIRE_AUTH });
+      }
+      return sendJson(res, 200, { success: true, readOnly: READ_ONLY, disableShell: DISABLE_SHELL, skipJail: SKIP_JAIL, requireAuth: REQUIRE_AUTH });
+    }
+    if (req.method === 'POST' && url.pathname === '/api/rotate-token') {
+      TOKEN = crypto.randomBytes(24).toString('hex');
+      const tokenFile = path.join(os.homedir(), '.easy-mcp', 'token');
+      try {
+        fs.mkdirSync(path.dirname(tokenFile), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(tokenFile, TOKEN + '\n', { mode: 0o600 });
+      } catch {}
+      return sendJson(res, 200, { success: true, token: TOKEN });
     }
     if (req.method === 'POST' && url.pathname === '/api/stop-job') {
       const { id } = JSON.parse(await readBody(req) || '{}');
@@ -2116,6 +2198,9 @@ const server = http.createServer(async (req, res) => {
       const raw = await readBody(req);
       let parsed;
       try { parsed = JSON.parse(raw || '{}'); } catch { return sendJson(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }); }
+      if (Array.isArray(parsed) && parsed.length === 0) {
+        return sendJson(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } });
+      }
       const messages = Array.isArray(parsed) ? parsed : [parsed];
       const isInit = messages.some(m => m && m.method === 'initialize');
       let sessionId = req.headers['mcp-session-id'];
@@ -2143,12 +2228,13 @@ const server = http.createServer(async (req, res) => {
       const accept = req.headers.accept || '';
       if (!accept.includes('text/event-stream')) {
         // Plain GET (e.g. URL validators): answer with a JSON status so connectors can probe the endpoint.
+        const currentTools = toolList();
         return sendJson(res, 200, {
           status: 'online',
           service: 'Easy MCP',
           protocolVersion: '2025-03-26',
-          toolsCount: TOOLS.length,
-          tools: TOOLS.map(t => t.name)
+          toolsCount: currentTools.length,
+          tools: currentTools.map(t => t.name)
         });
       }
       // Legacy SSE transport: pad to flush proxy buffers, then send the endpoint event.
@@ -2169,9 +2255,15 @@ const server = http.createServer(async (req, res) => {
       res.on('close', cleanup);
       return;
     }
-    if (url.pathname === '/mcp' && req.method === 'DELETE') {
-      const sessionId = req.headers['mcp-session-id'];
-      if (sessionId) mcpSessions.delete(sessionId);
+    if ((url.pathname === '/mcp' || url.pathname === '/messages' || url.pathname === '/sse') && req.method === 'DELETE') {
+      const sessionId = url.searchParams.get('sessionId') || req.headers['mcp-session-id'];
+      if (sessionId) {
+        mcpSessions.delete(sessionId);
+        const sse = sseSessions.get(sessionId);
+        if (sse) { try { sse.end(); } catch {} }
+        sseSessions.delete(sessionId);
+        sseSessionTokens.delete(sessionId);
+      }
       res.writeHead(200);
       return res.end();
     }
@@ -2190,9 +2282,20 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/messages') {
       const sessionId = url.searchParams.get('sessionId');
       const sse = sseSessions.get(sessionId);
-      const msg = JSON.parse(await readBody(req) || '{}');
-      const out = await handleRpc(msg);
-      if (out && sse) sse.write(`event: message\ndata: ${JSON.stringify(out)}\n\n`);
+      if (!sessionId || !sse) {
+        return sendJson(res, 404, { error: 'Session not found' });
+      }
+      let msg;
+      try {
+        msg = JSON.parse(await readBody(req) || '{}');
+      } catch {
+        return sendJson(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
+      }
+      const messages = Array.isArray(msg) ? msg : [msg];
+      for (const m of messages) {
+        const out = await handleRpc(m);
+        if (out && sse) sse.write(`event: message\ndata: ${JSON.stringify(out)}\n\n`);
+      }
       res.writeHead(202);
       return res.end();
     }
