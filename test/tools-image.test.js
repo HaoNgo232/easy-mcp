@@ -198,6 +198,7 @@ describe('Easy MCP QA Test Suite: Tools, Image Handling & Security Switches', ()
     serverPort = await getFreePort();
     testProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'easy-mcp-qa-project-'));
     outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'easy-mcp-qa-outside-'));
+    const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'easy-mcp-qa-home-'));
 
     // Create an outside secret file for path-jail verification
     fs.writeFileSync(path.join(outsideDir, 'secret_outside.txt'), 'SUPER_SECRET_EXTERNAL_CONTENT');
@@ -207,10 +208,13 @@ describe('Easy MCP QA Test Suite: Tools, Image Handling & Security Switches', ()
     serverProcess = spawn(process.execPath, [serverScript], {
       env: {
         ...process.env,
+        HOME: testHome,
+        USERPROFILE: testHome,
         EASY_MCP_PORT: String(serverPort),
         EASY_MCP_TOKEN: serverToken,
         EASY_MCP_TUNNEL: 'none',
-        EASY_MCP_PROJECT: testProjectDir
+        EASY_MCP_PROJECT: testProjectDir,
+        EASY_MCP_REQUIRE_AUTH: '1'
       },
       stdio: ['ignore', 'pipe', 'pipe']
     });

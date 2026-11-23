@@ -138,16 +138,20 @@ describe('Easy MCP Protocol & Streaming QA Test Suite', () => {
     // Create test 1x1 PNG for image testing
     fs.writeFileSync(testPngPath, Buffer.from(PNG_1X1_BASE64, 'base64'));
 
+    const testHome = fs.mkdtempSync(path.join(require('os').tmpdir(), 'easy-mcp-proto-home-'));
     // Start server process
     const serverPath = path.join(projectRoot, 'server.js');
     serverProc = spawn(process.execPath, [serverPath, projectRoot, '--port', String(TEST_PORT), '--token', TEST_TOKEN], {
       cwd: projectRoot,
       env: {
         ...process.env,
+        HOME: testHome,
+        USERPROFILE: testHome,
         EASY_MCP_PORT: String(TEST_PORT),
         EASY_MCP_TOKEN: TEST_TOKEN,
         EASY_MCP_TUNNEL: 'none',
-        EASY_MCP_PROJECT: projectRoot
+        EASY_MCP_PROJECT: projectRoot,
+        EASY_MCP_REQUIRE_AUTH: '1'
       },
       stdio: ['ignore', 'pipe', 'pipe']
     });

@@ -86,7 +86,11 @@ function saveConfig(patch) {
     fs.writeFileSync(configFile, JSON.stringify({ ...loadConfig(), ...patch }, null, 2) + '\n');
   } catch {}
 }
-let REQUIRE_AUTH = args.includes('--no-auth') ? false : (process.env.EASY_MCP_REQUIRE_AUTH === '0' ? false : (loadConfig().requireAuth !== false));
+let REQUIRE_AUTH = args.includes('--no-auth')
+  ? false
+  : (process.env.EASY_MCP_REQUIRE_AUTH !== undefined
+      ? process.env.EASY_MCP_REQUIRE_AUTH !== '0'
+      : (loadConfig().requireAuth !== false));
 function tailscaleBin() {
   if (process.platform === 'win32') {
     const defaultPath = 'C:\\Program Files\\Tailscale\\tailscale.exe';
@@ -94,6 +98,35 @@ function tailscaleBin() {
   }
   return 'tailscale';
 }
+
+function getOrCreateShortId() {
+  const cfg = loadConfig();
+  if (cfg.shortId && typeof cfg.shortId === 'string' && /^[a-z0-9]{4,12}$/.test(cfg.shortId)) {
+    return cfg.shortId;
+  }
+  const chars = 'abcdefghijklmnpqrstuvwxyz23456789';
+  let id = '';
+  for (let i = 0; i < 6; i++) id += chars.charAt(Math.floor(Math.random() * chars.length));
+  saveConfig({ shortId: id });
+  return id;
+}
+
+const WORKER_URL = process.env.EASY_MCP_WORKER_URL || 'https://abc-tunnel.us';
+
+async function registerTunnelUrl(shortId, tunnelUrl) {
+  try {
+    const res = await fetch(`${WORKER_URL}/api/tunnel/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shortId, tunnelUrl })
+    });
+    return res.ok;
+  } catch (err) {
+    console.warn(`[Tunnel] Failed to register persistent domain with ${WORKER_URL}: ${err.message}`);
+    return false;
+  }
+}
+
 let tunnelMode = process.env.EASY_MCP_TUNNEL || loadConfig().tunnel || 'cloudflare';
 if (!['cloudflare', 'funnel', 'none'].includes(tunnelMode)) tunnelMode = 'cloudflare';
 let tunnelProc = null;
@@ -173,11 +206,21 @@ async function startTunnel(mode) {
   // cloudflare
   tunnelMode = 'cloudflare';
   const bin = await ensureCloudflared();
-  tunnelProc = spawn(bin, ['tunnel', '--url', `http://127.0.0.1:${PORT}`], { stdio: ['ignore', 'pipe', 'pipe'] });
-  const onData = (d) => {
-    const m = String(d).match(/https:\/\/(?!api\.)[a-z0-9-]+\.trycloudflare\.com/);
-    if (m && !publicUrl) {
-      publicUrl = m[0];
+  const shortId = process.env.EASY_MCP_SHORT_ID || getOrCreateShortId();
+  tunnelProc = spawn(bin, ['tunnel', '--url', `http://127.0.0.1:${PORT}`, '--no-autoupdate', '--retries', '99'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let lastDirectUrl = '';
+  const onData = async (d) => {
+    const lines = String(d);
+    const regex = /https:\/\/(?!api\.)([a-z0-9-]+)\.trycloudflare\.com/gi;
+    let match;
+    let directUrl = null;
+    while ((match = regex.exec(lines)) !== null) {
+      directUrl = match[0];
+    }
+    if (directUrl && directUrl !== lastDirectUrl) {
+      lastDirectUrl = directUrl;
+      const ok = await registerTunnelUrl(shortId, directUrl);
+      publicUrl = ok ? `https://r${shortId}.abc-tunnel.us` : directUrl;
       const linkPath = REQUIRE_AUTH && TOKEN ? `/mcp/${TOKEN}` : '/mcp';
       console.log(`MCP link:  ${publicUrl}${linkPath}`);
     }
@@ -1483,8 +1526,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       <div style="display:flex; align-items:center; gap:10px; margin-top:12px; flex-wrap:wrap;">
         <span style="font-size:12px; color:var(--muted);">Tunnel:</span>
         <div style="display:inline-flex; border:1px solid var(--border); border-radius:10px; overflow:hidden;">
-          <button id="tunCloudflare" onclick="setTunnel('cloudflare')" style="padding:7px 14px; font-size:12.5px; border:none; cursor:pointer; background:transparent; color:inherit;">Cloudflare</button>
-          <button id="tunFunnel" onclick="setTunnel('funnel')" style="padding:7px 14px; font-size:12.5px; border:none; cursor:pointer; background:transparent; color:inherit;">Tailscale · persistent link</button>
+          <button id="tunCloudflare" onclick="setTunnel('cloudflare')" style="padding:7px 14px; font-size:12.5px; border:none; cursor:pointer; background:transparent; color:inherit;">Cloudflare · persistent link</button>
+          <button id="tunFunnel" onclick="setTunnel('funnel')" style="padding:7px 14px; font-size:12.5px; border:none; cursor:pointer; background:transparent; color:inherit;">Tailscale Funnel</button>
         </div>
         <span id="tunError" style="font-size:12px; color:#e5484d;"></span>
       </div>
