@@ -192,8 +192,10 @@ function killCloudflared(port) {
 
 function stopTunnel() {
   killCloudflared(PORT);
-  // Note: Funnel is left ON in tailscaled when switching away — turning it off
-  // requires the Tailscale owner's session, and it proxies the same port anyway.
+  try {
+    const ts = tailscaleBin();
+    spawnSync(ts, ['funnel', '--bg', 'reset'], { stdio: 'ignore', timeout: 5000 });
+  } catch {}
   publicUrl = '';
   directTunnelUrl = '';
 }
@@ -203,11 +205,19 @@ async function startTunnel(mode) {
   if (mode === 'none') { tunnelMode = 'none'; return; }
   if (mode === 'funnel') {
     const ts = tailscaleBin();
-    try { spawnSync(ts, ['funnel', '--bg', String(PORT)], { stdio: 'ignore', timeout: 20000 }); } catch {}
+    try { spawnSync(ts, ['funnel', '--bg', 'reset'], { stdio: 'ignore', timeout: 5000 }); } catch {}
+    const funnelRes = spawnSync(ts, ['funnel', '--bg', String(PORT)], { encoding: 'utf8', timeout: 20000 });
     let dns = '';
+    let allowFunnel = false;
     try {
       const st = spawnSync(ts, ['status', '--json'], { encoding: 'utf8', timeout: 15000 });
-      dns = JSON.parse(st.stdout || '{}').Self?.DNSName?.replace(/\.$/, '') || '';
+      const statusJson = JSON.parse(st.stdout || '{}');
+      dns = statusJson.Self?.DNSName?.replace(/\.$/, '') || '';
+    } catch {}
+    try {
+      const fst = spawnSync(ts, ['funnel', 'status', '--json'], { encoding: 'utf8', timeout: 10000 });
+      const fJson = JSON.parse(fst.stdout || '{}');
+      allowFunnel = Object.keys(fJson.AllowFunnel || {}).length > 0;
     } catch {}
     dns = dns || process.env.EASY_MCP_FUNNEL_HOST || '';
     if (!dns) {
@@ -215,6 +225,14 @@ async function startTunnel(mode) {
       tunnelMode = 'funnel';
       return;
     }
+    const funnelOutput = ((funnelRes.stdout || '') + (funnelRes.stderr || ''));
+    if (!allowFunnel && funnelOutput.includes('Funnel is not enabled')) {
+      const m = funnelOutput.match(/https:\/\/login\.tailscale\.com\/[^\s]+/);
+      tunnelError = 'Tailscale Funnel requires ACL permission: ' + (m ? m[0] : 'https://login.tailscale.com/admin/dns');
+    }
+    try {
+      spawnSync(ts, ['cert', dns], { stdio: 'ignore', timeout: 15000, cwd: easyMcpHome });
+    } catch {}
     tunnelMode = 'funnel';
     publicUrl = 'https://' + dns;
     const linkPath = REQUIRE_AUTH && TOKEN ? `/mcp/${TOKEN}` : '/mcp';
